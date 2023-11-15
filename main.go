@@ -20,6 +20,12 @@ import (
 	"github.com/smartcontractkit/chainlink/v2/core/gethwrappers/shared/generated/link_token"
 )
 
+const (
+	mintAmount int64 = 100_000_000_000_000_000
+	allowance  int64 = 10
+	transfer   int64 = 6
+)
+
 type Config struct {
 	HTTPURL            string `json:"http_url"`
 	ChainID            int64  `json:"chain_id"`
@@ -69,7 +75,7 @@ func main() {
 			panic(err)
 		}
 
-		if err := mintAmountTo(ctx, contract, ownerClient, 100_000_000_000_000_000, conf.OwnerAddress); err != nil {
+		if err := mintAmountTo(ctx, contract, ownerClient, mintAmount, conf.OwnerAddress); err != nil {
 			panic(err)
 		}
 	}
@@ -80,14 +86,20 @@ func main() {
 		chainID: big.NewInt(conf.ChainID),
 	}
 
+	fmt.Println("")
+	fmt.Println("balance and approve")
 	// print balance of sender and send
 	mustPrintBalance(ctx, contract, conf.OwnerAddress)
-	mustApprove(ctx, contract, ownerClient, 10, conf.OwnerAddress, conf.ReceiverAddress)
+	mustApprove(ctx, contract, ownerClient, allowance, conf.OwnerAddress, conf.ReceiverAddress)
+	fmt.Println("")
 
+	fmt.Println("balance and receive")
 	// print balance of receiver and run
 	mustPrintBalance(ctx, contract, conf.ReceiverAddress)
-	mustReceive(ctx, contract, receiverClient, 6, conf.OwnerAddress, conf.ReceiverAddress)
+	mustReceive(ctx, contract, receiverClient, transfer, conf.OwnerAddress, conf.ReceiverAddress)
+	fmt.Println("")
 
+	fmt.Println("balances after")
 	// print both balances after
 	mustPrintBalance(ctx, contract, conf.OwnerAddress)
 	mustPrintBalance(ctx, contract, conf.ReceiverAddress)
@@ -119,7 +131,7 @@ func buildTxOpts(ctx context.Context, client *client) (*bind.TransactOpts, error
 
 	auth.Nonce = big.NewInt(int64(nonce))
 	auth.Value = big.NewInt(0) // in wei
-	auth.GasLimit = 0
+	// auth.GasLimit = 0
 	auth.GasPrice = gasPrice
 
 	return auth, nil
@@ -131,7 +143,7 @@ func deploy(ctx context.Context, client *client) (*link_token.LinkToken, error) 
 		return nil, err
 	}
 
-	_, trx, contract, err := link_token.DeployLinkToken(opts, client.rpc)
+	addr, trx, contract, err := link_token.DeployLinkToken(opts, client.rpc)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +151,8 @@ func deploy(ctx context.Context, client *client) (*link_token.LinkToken, error) 
 	if _, err := bind.WaitDeployed(ctx, client.rpc, trx); err != nil {
 		return nil, err
 	}
+
+	fmt.Println("contract address:", addr.Hex())
 
 	return contract, nil
 }
@@ -244,13 +258,6 @@ func mustApprove(ctx context.Context, contract *link_token.LinkToken, cl *client
 }
 
 func mustReceive(ctx context.Context, contract *link_token.LinkToken, cl *client, amt int64, from, to string) {
-	allowed, err := contract.Allowance(&bind.CallOpts{Context: ctx}, common.HexToAddress(from), common.HexToAddress(to))
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("%s juels allowed from %s to %s\n", allowed.String(), from, to)
-
 	opts, err := buildTxOpts(ctx, cl)
 	if err != nil {
 		panic(err)
@@ -270,7 +277,7 @@ func mustReceive(ctx context.Context, contract *link_token.LinkToken, cl *client
 		panic(fmt.Errorf("failed status receipt: %d", receipt.Status))
 	}
 
-	allowed, err = contract.Allowance(&bind.CallOpts{Context: ctx}, common.HexToAddress(from), common.HexToAddress(to))
+	allowed, err := contract.Allowance(&bind.CallOpts{Context: ctx}, common.HexToAddress(from), common.HexToAddress(to))
 	if err != nil {
 		panic(err)
 	}
