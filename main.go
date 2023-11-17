@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -21,9 +22,10 @@ import (
 )
 
 const (
-	mintAmount int64 = 100_000_000_000_000_000
-	allowance  int64 = 10
-	transfer   int64 = 6
+	mintAmount           int64  = 100_000_000_000_000_000
+	allowance            int64  = 10
+	transfer             int64  = 6
+	defaultConfirmations uint16 = 2
 )
 
 type Config struct {
@@ -50,6 +52,7 @@ func main() {
 		rpc:     ethclient.NewClient(rpcClient),
 		key:     privateKey(conf.OwnerPrivateKey),
 		chainID: big.NewInt(conf.ChainID),
+		address: common.HexToAddress(conf.OwnerAddress),
 	}
 
 	ctx := context.Background()
@@ -109,12 +112,11 @@ type client struct {
 	rpc     *ethclient.Client
 	key     *ecdsa.PrivateKey
 	chainID *big.Int
+	address common.Address
 }
 
 func buildTxOpts(ctx context.Context, client *client) (*bind.TransactOpts, error) {
-	var address common.Address
-
-	nonce, err := client.rpc.PendingNonceAt(ctx, address)
+	nonce, err := client.rpc.PendingNonceAt(ctx, client.address)
 	if err != nil {
 		return nil, err
 	}
@@ -184,13 +186,8 @@ func ensureMintingRoleFor(ctx context.Context, contract *link_token.LinkToken, c
 			return err
 		}
 
-		receipt, err := bind.WaitMined(ctx, cl.rpc, trx)
-		if err != nil {
+		if err := waitMined(ctx, cl, trx, defaultConfirmations); err != nil {
 			return err
-		}
-
-		if receipt.Status == types.ReceiptStatusFailed {
-			return fmt.Errorf("failed status receipt: %d", receipt.Status)
 		}
 	}
 
@@ -208,13 +205,8 @@ func mintAmountTo(ctx context.Context, contract *link_token.LinkToken, cl *clien
 		return err
 	}
 
-	receipt, err := bind.WaitMined(ctx, cl.rpc, trx)
-	if err != nil {
+	if err := waitMined(ctx, cl, trx, defaultConfirmations); err != nil {
 		return err
-	}
-
-	if receipt.Status == types.ReceiptStatusFailed {
-		return fmt.Errorf("failed status receipt: %d", receipt.Status)
 	}
 
 	return nil
@@ -240,13 +232,8 @@ func mustApprove(ctx context.Context, contract *link_token.LinkToken, cl *client
 		panic(err)
 	}
 
-	receipt, err := bind.WaitMined(ctx, cl.rpc, trx)
-	if err != nil {
+	if err := waitMined(ctx, cl, trx, defaultConfirmations); err != nil {
 		panic(err)
-	}
-
-	if receipt.Status == types.ReceiptStatusFailed {
-		panic(fmt.Errorf("failed status receipt: %d", receipt.Status))
 	}
 
 	allowed, err := contract.Allowance(&bind.CallOpts{Context: ctx}, common.HexToAddress(from), common.HexToAddress(to))
@@ -268,13 +255,8 @@ func mustReceive(ctx context.Context, contract *link_token.LinkToken, cl *client
 		panic(err)
 	}
 
-	receipt, err := bind.WaitMined(ctx, cl.rpc, trx)
-	if err != nil {
+	if err := waitMined(ctx, cl, trx, defaultConfirmations); err != nil {
 		panic(err)
-	}
-
-	if receipt.Status == types.ReceiptStatusFailed {
-		panic(fmt.Errorf("failed status receipt: %d", receipt.Status))
 	}
 
 	allowed, err := contract.Allowance(&bind.CallOpts{Context: ctx}, common.HexToAddress(from), common.HexToAddress(to))
@@ -315,5 +297,36 @@ func privateKey(key string) *ecdsa.PrivateKey {
 			Y:     pkY,
 		},
 		D: pkBase,
+	}
+}
+
+func waitMined(ctx context.Context, cl *client, trx *types.Transaction, confirmations uint16) error {
+	receipt, err := bind.WaitMined(ctx, cl.rpc, trx)
+	if err != nil {
+		return err
+	}
+
+	if receipt.Status == types.ReceiptStatusFailed {
+		return fmt.Errorf("failed status receipt: %d", receipt.Status)
+	}
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		block, err := cl.rpc.BlockNumber(ctx)
+		if err != nil {
+			return err
+		}
+
+		if block-receipt.BlockNumber.Uint64() >= uint64(confirmations) {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
